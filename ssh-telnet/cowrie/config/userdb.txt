@@ -1,0 +1,31 @@
+# Database utenti Cowrie
+# Formato: username:uid:password
+#
+# Caratteri speciali nel campo password:
+#   *   = accetta qualsiasi password
+#   !   = rifiuta qualsiasi password
+#   x   = password specifica richiesta
+#
+# Cowrie accetta il login solo per le combinazioni definite qui.
+# Questo permette di controllare quali credenziali danno accesso alla shell emulata.
+
+# Credenziali comuni accettate (per attirare gli attaccanti)
+root:0:root
+root:0:123456
+root:0:password
+root:0:admin
+root:0:toor
+
+admin:1000:admin
+admin:1000:password
+admin:1000:1234
+
+user:1001:user
+user:1001:123456
+
+# Accetta qualsiasi password per l'utente root (opzionale, utile per massimizzare i dati raccolti)
+# root:0:*
+
+# Rifiuta sempre il login per questi utenti
+guest:1002:!
+test:1003:!
