@@ -1,0 +1,24 @@
+# Database utenti Kippo
+# Formato identico a Cowrie: username:uid:password
+#
+# Caratteri speciali nel campo password:
+#   *   = accetta qualsiasi password
+#   !   = rifiuta sempre il login
+#
+# Kippo accetta il login solo per le credenziali qui elencate.
+
+root:0:root
+root:0:123456
+root:0:password
+root:0:admin
+root:0:toor
+
+admin:1000:admin
+admin:1000:password
+admin:1000:1234
+
+user:1001:user
+user:1001:123456
+
+guest:1002:!
+test:1003:!

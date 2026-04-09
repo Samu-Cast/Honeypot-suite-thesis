@@ -1,0 +1,5 @@
+# Dipendenze per lo script di analisi dei log Kippo
+# Installare con: pip install -r requirements.txt
+#
+# Lo script usa solo librerie della standard library di Python (re, collections, argparse).
+# Non sono necessarie dipendenze esterne.
