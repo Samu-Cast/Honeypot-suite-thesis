@@ -13,6 +13,7 @@ Il repository è organizzato in macro-categorie, ciascuna contenente gli honeypo
 │   └── kippo/               # SSH a media interazione (riferimento storico)
 ├── web/                     # Honeypot per servizi web (HTTP/HTTPS)
 ├── multi-protocol/          # Honeypot multi-protocollo
+│   └── dionaea/             # Cattura malware su SMB, FTP, HTTP, MSSQL, ecc.
 ├── iot/                     # Honeypot per dispositivi IoT
 └── README.md
 ```
@@ -23,7 +24,7 @@ Il repository è organizzato in macro-categorie, ciascuna contenente gli honeypo
 |-----------|-------------|----------|
 | [**ssh-telnet**](./ssh-telnet/) | Protocolli di accesso remoto (SSH, Telnet) | Cowrie, Kippo |
 | **web** | Servizi web (HTTP/HTTPS) | - |
-| **multi-protocol** | Cattura su più protocolli | - |
+| [**multi-protocol**](./multi-protocol/) | Cattura su più protocolli | Dionaea |
 | **iot** | Dispositivi IoT | - |
 
 La tabella verrà aggiornata man mano che verranno aggiunti nuovi honeypot.
