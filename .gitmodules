@@ -1,0 +1,3 @@
+[submodule "ssh-telnet/cowrie/src"]
+	path = ssh-telnet/cowrie/src
+	url = https://github.com/Samu-Cast/cowrie.git

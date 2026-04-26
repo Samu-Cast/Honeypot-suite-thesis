@@ -1,8 +1,8 @@
-version: "3.8"
-
 services:
   cowrie:
-    image: cowrie/cowrie:latest
+    build:
+      context: ../src
+      dockerfile: docker/Dockerfile
     container_name: cowrie-honeypot
     restart: unless-stopped
     ports:
@@ -23,6 +23,7 @@ volumes:
   cowrie-log:
   cowrie-tty:
   cowrie-downloads:
+
 
 networks:
   honeypot-net:
