@@ -1,0 +1,9 @@
+# Dati runtime degli honeypot (generati da Docker, non vanno in repo)
+**/data/
+
+# File di sistema macOS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/

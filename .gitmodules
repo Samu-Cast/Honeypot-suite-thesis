@@ -1,3 +1,6 @@
 [submodule "ssh-telnet/cowrie/src"]
 	path = ssh-telnet/cowrie/src
 	url = https://github.com/Samu-Cast/cowrie.git
+[submodule "multi-protocol/dionaea"]
+	path = multi-protocol/dionaea
+	url = https://github.com/Samu-Cast/dionaea.git

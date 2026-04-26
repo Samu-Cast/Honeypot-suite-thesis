@@ -1,0 +1,30 @@
+services:
+  dionaea:
+    image: dinotools/dionaea:latest
+    container_name: dionaea
+    restart: unless-stopped
+
+    # Porte emulate da Dionaea (commenta quelle non necessarie)
+    ports:
+      - "21:21"          # FTP
+      - "42:42"          # nameserver (WINS)
+      - "69:69/udp"      # TFTP
+      - "80:80"          # HTTP
+      - "135:135"        # MSRPC
+      - "443:443"        # HTTPS
+      - "445:445"        # SMB ← principale vettore di malware (EternalBlue, WannaCry)
+      - "1433:1433"      # MSSQL
+      - "1723:1723"      # PPTP
+      - "1883:1883"      # MQTT
+      - "1900:1900/udp"  # UPnP
+      - "3306:3306"      # MySQL
+      - "5060:5060"      # SIP (TCP)
+      - "5060:5060/udp"  # SIP (UDP)
+      - "5061:5061"      # SIP-TLS
+      - "11211:11211"    # Memcached
+
+    # Volumi persistenti: log, dati catturati, configurazione
+    volumes:
+      - ./data/etc:/opt/dionaea/etc
+      - ./data/lib:/opt/dionaea/var/lib
+      - ./data/log:/opt/dionaea/var/log
