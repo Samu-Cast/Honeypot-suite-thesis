@@ -1,0 +1,42 @@
+body {
+    background-color: #f5f5f5;
+    padding-top: 20px;
+}
+
+.stat-card {
+    text-align: center;
+    padding: 20px;
+}
+
+.stat-card h2 {
+    font-size: 2.5rem;
+    font-weight: bold;
+    color: #333;
+}
+
+.stat-card p {
+    color: #888;
+    margin: 0;
+}
+
+.pattern-badge {
+    font-size: 0.8rem;
+    padding: 4px 10px;
+    border-radius: 12px;
+    color: white;
+}
+
+.badge-FULL_SPECTRUM { background: #dc3545; }
+.badge-BRUTE_FORCE_SSH { background: #e67e22; }
+.badge-SSH_THEN_PAYLOAD { background: #e74c3c; }
+.badge-SSH_THEN_LATERAL { background: #f39c12; }
+.badge-PAYLOAD_AND_LATERAL { background: #9b59b6; }
+.badge-AUTOMATED_EXPLOIT { background: #3498db; }
+.badge-RECON_ONLY { background: #1abc9c; }
+.badge-LOW_SSH_ACTIVITY { background: #95a5a6; }
+.badge-UNKNOWN { background: #bdc3c7; }
+
+#chartContainer {
+    max-width: 400px;
+    margin: 0 auto;
+}

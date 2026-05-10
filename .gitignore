@@ -1,0 +1,14 @@
+appunti
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+
+# Log e dati runtime (generati dai container Docker)
+honeynet/cowrie/logs/*.json
+honeynet/dionaea/logs/*
+!honeynet/dionaea/logs/.gitkeep
+honeynet/opencanary/logs/*.log
+honeynet/correlator/output/*.db
+honeynet/dionaea/data/*.sqlite

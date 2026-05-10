@@ -1,0 +1,78 @@
+services:
+  cowrie:
+    image: cowrie/cowrie:latest
+    container_name: cowrie_hy
+    restart: unless-stopped
+    ports:
+      - "22:2222"   # SSH
+      - "23:2223"   # Telnet
+    volumes:
+      - ./cowrie/config/cowrie.cfg:/cowrie/cowrie-git/etc/cowrie.cfg
+      - ./cowrie/logs:/cowrie/cowrie-git/var/log/cowrie
+    networks:
+      honeynet_net:
+        ipv4_address: 172.20.0.10
+
+  dionaea:
+    image: dinotools/dionaea:latest
+    container_name: dionaea_hy
+    restart: unless-stopped
+    ports:
+      - "21:21"     # FTP
+      - "80:80"     # HTTP
+      - "443:443"   # HTTPS
+      - "445:445"   # SMB
+      - "3306:3306" # MySQL
+    volumes:
+      - ./dionaea/logs:/opt/dionaea/var/log
+      - ./dionaea/malware:/opt/dionaea/var/lib/dionaea/bistreams
+      - ./dionaea/data:/opt/dionaea/var/lib/dionaea/logsql  # sqlite db with connection logs
+    networks:
+      honeynet_net:
+        ipv4_address: 172.20.0.11
+
+  opencanary:
+    image: thinkst/opencanary:latest
+    container_name: opencanary_hy
+    restart: unless-stopped
+    # no ports exposed to the outside, it only generates internal alerts
+    volumes:
+      - ./opencanary/opencanary.conf:/root/.opencanary.conf
+      - ./opencanary/logs:/var/log/opencanary
+    networks:
+      honeynet_net:
+        ipv4_address: 172.20.0.12
+
+  correlator:
+    build: ./correlator
+    container_name: correlator_hy
+    restart: unless-stopped
+    # no ports, it just reads logs and writes to its own db
+    volumes:
+      - ./cowrie/logs:/logs/cowrie:ro
+      - ./opencanary/logs:/logs/opencanary:ro
+      - ./dionaea/logs:/logs/dionaea:ro
+      - ./dionaea/data:/data/dionaea:ro         # dionaea sqlite db
+      - ./correlator/output:/output
+    networks:
+      honeynet_net:
+        ipv4_address: 172.20.0.20
+
+  dashboard:
+    build: ./dashboard
+    container_name: dashboard_hy
+    restart: unless-stopped
+    ports:
+      - "8888:5000"  # web UI
+    volumes:
+      - ./correlator/output:/data:ro
+    networks:
+      honeynet_net:
+        ipv4_address: 172.20.0.21
+
+networks:
+  honeynet_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
