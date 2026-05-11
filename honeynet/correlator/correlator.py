@@ -10,8 +10,8 @@ COWRIE_LOG = "/logs/cowrie/cowrie.json"
 OPENCANARY_LOG = "/logs/opencanary/opencanary.log"
 DIONAEA_DB = "/data/dionaea/dionaea.sqlite"
 OUTPUT_DB = "/output/correlations.db"
-AGGREGATION_INTERVAL = 60  # how often to check for expired sessions (secs)
-SESSION_WINDOW = timedelta(minutes=1)  # sessions older than this get processed
+AGGREGATION_INTERVAL = 2  # how often to check for expired sessions (secs)
+SESSION_WINDOW = timedelta(seconds=15)  # sessions older than this get processed
 
 # shared dict to collect events from all the reader threads
 events_lock = threading.Lock()
@@ -72,7 +72,6 @@ def follow_file(filename, source_name):
         time.sleep(1)
 
     with open(filename, 'r') as f:
-        f.seek(0, 2)  # jump to end of file
         while True:
             line = f.readline()
             if not line:
@@ -154,14 +153,31 @@ def analyze_and_aggregate():
                 if not events:
                     continue
 
-                latest_event_time = max([e['timestamp'] for e in events])
+                # Sort events by timestamp to process chronologically
+                events.sort(key=lambda x: x['timestamp'])
+                
+                # Split events into distinct sessions if the gap between them is > SESSION_WINDOW
+                sessions_to_process = []
+                current_session = [events[0]]
+                
+                for e in events[1:]:
+                    gap = e['timestamp'] - current_session[-1]['timestamp']
+                    if gap > SESSION_WINDOW:
+                        sessions_to_process.append(current_session)
+                        current_session = [e]
+                    else:
+                        current_session.append(e)
+                sessions_to_process.append(current_session)
+
+                latest_event_time = current_session[-1]['timestamp']
                 # strip timezone if present, otherwise comparison with now() breaks
                 if latest_event_time.tzinfo:
                     latest_event_time = latest_event_time.replace(tzinfo=None)
 
-                # if no new events came in for longer than SESSION_WINDOW, finalize this session
+                # if no new events came in for longer than SESSION_WINDOW, finalize
                 if now - latest_event_time > SESSION_WINDOW:
-                    process_session(ip, events)
+                    for s in sessions_to_process:
+                        process_session(ip, s)
                     del active_sessions[ip]
 
 

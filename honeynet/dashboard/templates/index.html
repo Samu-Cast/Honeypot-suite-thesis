@@ -59,13 +59,18 @@
                         </thead>
                         <tbody>
                             {% for pattern, count in stats.patterns %}
-                            <tr>
+                            <tr class="{% if loop.index > 3 %}d-none breakdown-row{% endif %}">
                                 <td><span class="pattern-badge badge-{{ pattern }}">{{ pattern }}</span></td>
                                 <td>{{ count }}</td>
                             </tr>
                             {% endfor %}
                         </tbody>
                     </table>
+                    {% if stats.patterns|length > 3 %}
+                    <div class="text-center mt-2">
+                        <button class="btn btn-outline-primary btn-sm" id="btn-show-breakdown" onclick="toggleRows('breakdown-row', 'btn-show-breakdown')">Show More</button>
+                    </div>
+                    {% endif %}
                 </div>
             </div>
         </div>
@@ -91,7 +96,7 @@
                     </thead>
                     <tbody>
                         {% for row in correlations %}
-                        <tr>
+                        <tr class="{% if loop.index > 3 %}d-none session-row{% endif %}">
                             <td>{{ row["timestamp"][:19] }}</td>
                             <td><code>{{ row["source_ip"] }}</code></td>
                             <td><span class="pattern-badge badge-{{ row['pattern'] }}">{{ row["pattern"] }}</span></td>
@@ -105,6 +110,11 @@
                     </tbody>
                 </table>
             </div>
+            {% if correlations|length > 3 %}
+            <div class="text-center mt-2">
+                <button class="btn btn-outline-primary btn-sm" id="btn-show-sessions" onclick="toggleRows('session-row', 'btn-show-sessions')">Show More</button>
+            </div>
+            {% endif %}
             {% else %}
             <p class="text-muted mt-3">No correlated sessions yet. Wait for the correlator to process some events.</p>
             {% endif %}
@@ -116,7 +126,7 @@
     </div>
 
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>
-    {% endif %}
+
 </body>
 
 </html>

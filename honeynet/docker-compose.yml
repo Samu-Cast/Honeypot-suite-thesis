@@ -65,6 +65,7 @@ services:
     ports:
       - "8888:5000"  # web UI
     volumes:
+      - ./dashboard:/app
       - ./correlator/output:/data:ro
     networks:
       honeynet_net:
