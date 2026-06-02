@@ -1,14 +1,25 @@
 appunti
+appunti2.md
 .DS_Store
 
 # Python
 __pycache__/
 *.pyc
+.pytest_cache/
 
 # Log e dati runtime (generati dai container Docker)
 honeynet/cowrie/logs/*.json
-honeynet/dionaea/logs/*
-!honeynet/dionaea/logs/.gitkeep
 honeynet/opencanary/logs/*.log
 honeynet/correlator/output/*.db
+honeynet/correlator/output/*.log
+
+# Dionaea
+honeynet/dionaea/logs/*
+!honeynet/dionaea/logs/.gitkeep
 honeynet/dionaea/data/*.sqlite
+honeynet/dionaea/malware/bistreams/
+
+# Test runtime artifacts
+honeynet/test/cowrie/logs/*.json
+honeynet/test/opencanary/logs/*.log
+honeynet/test/dionaea/data/*.sqlite
