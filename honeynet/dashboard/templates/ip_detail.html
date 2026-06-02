@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IP Detail — {{ ip }}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+
+<body>
+    <div class="container">
+        <a href="/" class="btn btn-outline-secondary btn-sm mt-3 mb-3">← Back to Dashboard</a>
+
+        <h1 class="mb-4">
+            IP Detail: <code>{{ ip }}</code>
+            {% if intel and intel["is_proxy"] %}
+                <span class="badge bg-warning text-dark ms-2">VPN</span>
+            {% endif %}
+            {% if intel and intel["is_hosting"] %}
+                <span class="badge bg-info text-dark ms-2">Cloud</span>
+            {% endif %}
+        </h1>
+
+        {% if intel %}
+        <!-- IP Intelligence Card -->
+        <div class="card p-4 mb-4">
+            <h5>IP Intelligence</h5>
+            <div class="row mt-3">
+                <div class="col-md-6">
+                    <table class="table table-sm">
+                        <tr>
+                            <th>Country</th>
+                            <td>
+                                {% if intel["country_code"] %}
+                                <img src="https://flagcdn.com/24x18/{{ intel['country_code']|lower }}.png"
+                                     alt="{{ intel['country_code'] }}" class="me-2">
+                                {% endif %}
+                                {{ intel["country"] or "Unknown" }}
+                                {% if intel["country_code"] %}({{ intel["country_code"] }}){% endif %}
+                            </td>
+                        </tr>
+                        <tr>
+                            <th>City</th>
+                            <td>{{ intel["city"] or "Unknown" }}</td>
+                        </tr>
+                        <tr>
+                            <th>Coordinates</th>
+                            <td>
+                                {% if intel["lat"] and intel["lon"] %}
+                                    {{ intel["lat"] }}, {{ intel["lon"] }}
+                                    <a href="https://www.google.com/maps?q={{ intel['lat'] }},{{ intel['lon'] }}"
+                                       target="_blank" class="ms-2 btn btn-outline-primary btn-sm">
+                                        View on Map
+                                    </a>
+                                {% else %}
+                                    -
+                                {% endif %}
+                            </td>
+                        </tr>
+                        <tr>
+                            <th>Reverse DNS</th>
+                            <td><code>{{ intel["reverse_dns"] or "N/A" }}</code></td>
+                        </tr>
+                    </table>
+                </div>
+                <div class="col-md-6">
+                    <table class="table table-sm">
+                        <tr>
+                            <th>ISP</th>
+                            <td>{{ intel["isp"] or "Unknown" }}</td>
+                        </tr>
+                        <tr>
+                            <th>Organization</th>
+                            <td>{{ intel["org"] or "Unknown" }}</td>
+                        </tr>
+                        <tr>
+                            <th>ASN</th>
+                            <td><code>{{ intel["asn"] or "Unknown" }}</code></td>
+                        </tr>
+                        <tr>
+                            <th>Proxy / VPN</th>
+                            <td>
+                                {% if intel["is_proxy"] %}
+                                    <span class="badge bg-warning text-dark">Yes</span>
+                                {% else %}
+                                    <span class="badge bg-success">No</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        <tr>
+                            <th>Hosting / Cloud</th>
+                            <td>
+                                {% if intel["is_hosting"] %}
+                                    <span class="badge bg-info text-dark">Yes</span>
+                                {% else %}
+                                    <span class="badge bg-success">No</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        <tr>
+                            <th>Last Updated</th>
+                            <td>{{ intel["last_updated"][:19] if intel["last_updated"] else "-" }}</td>
+                        </tr>
+                    </table>
+                </div>
+            </div>
+        </div>
+        {% else %}
+        <div class="alert alert-secondary">
+            No intelligence data available for this IP yet. The enrichment worker may still be processing it.
+        </div>
+        {% endif %}
+
+        <!-- Sessions Table -->
+        <div class="card p-3">
+            <h5>Attack Sessions ({{ sessions|length }})</h5>
+            {% if sessions %}
+            <div class="table-responsive">
+                <table class="table table-striped table-hover mt-3">
+                    <thead>
+                        <tr>
+                            <th>Timestamp</th>
+                            <th>Pattern</th>
+                            <th>Cowrie</th>
+                            <th>Dionaea</th>
+                            <th>OpenCanary</th>
+                            <th>First Seen</th>
+                            <th>Last Seen</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in sessions %}
+                        <tr>
+                            <td>{{ row["timestamp"][:19] }}</td>
+                            <td><span class="pattern-badge badge-{{ row['pattern'] }}">{{ row["pattern"] }}</span></td>
+                            <td>{{ row["hits_cowrie"] }}</td>
+                            <td>{{ row["hits_dionaea"] }}</td>
+                            <td>{{ row["hits_opencanary"] }}</td>
+                            <td>{{ row["first_seen"][:19] if row["first_seen"] else "-" }}</td>
+                            <td>{{ row["last_seen"][:19] if row["last_seen"] else "-" }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <p class="text-muted mt-3">No sessions recorded for this IP.</p>
+            {% endif %}
+        </div>
+
+        <footer class="text-center text-muted mt-4 mb-3">
+            <small>Honeypot Suite &mdash; Tesi Triennale in Informatica</small>
+        </footer>
+    </div>
+</body>
+
+</html>

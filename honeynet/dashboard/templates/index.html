@@ -12,31 +12,42 @@
 
 <body>
     <div class="container">
-        <h1 class="mb-4">Honeynet Correlator Dashboard</h1>
+        <div class="d-flex align-items-center gap-3 mb-4">
+            <h1 class="mb-0">Honeynet Correlator Dashboard</h1>
+            <span id="live-indicator" class="badge bg-success d-flex align-items-center gap-1" style="font-size:0.8rem">
+                <span class="live-dot"></span> Live
+            </span>
+        </div>
 
-        <!-- stats cards -->
+        <!-- stats cards — values updated live via AJAX -->
         <div class="row mb-4">
-            <div class="col-md-4">
+            <div class="col-md-3">
                 <div class="card stat-card">
-                    <h2>{{ stats.total }}</h2>
+                    <h2 id="stat-total">{{ stats.total }}</h2>
                     <p>Total Correlated Sessions</p>
                 </div>
             </div>
-            <div class="col-md-4">
+            <div class="col-md-3">
                 <div class="card stat-card">
-                    <h2>{{ stats.unique_ips }}</h2>
+                    <h2 id="stat-unique-ips">{{ stats.unique_ips }}</h2>
                     <p>Unique Attacker IPs</p>
                 </div>
             </div>
-            <div class="col-md-4">
+            <div class="col-md-3">
                 <div class="card stat-card">
-                    <h2>{{ stats.patterns|length }}</h2>
+                    <h2 id="stat-patterns">{{ stats.patterns|length }}</h2>
                     <p>Distinct Attack Patterns</p>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card stat-card">
+                    <h2 id="stat-enriched">{{ stats.enriched_ips }}</h2>
+                    <p>Enriched IPs</p>
                 </div>
             </div>
         </div>
 
-        <!-- chart -->
+        <!-- charts row -->
         {% if stats.patterns %}
         <div class="row mb-4">
             <div class="col-md-6">
@@ -57,35 +68,72 @@
                                 <th>Count</th>
                             </tr>
                         </thead>
-                        <tbody>
+                        <tbody id="breakdown-tbody">
                             {% for pattern, count in stats.patterns %}
-                            <tr class="{% if loop.index > 3 %}d-none breakdown-row{% endif %}">
+                            <tr>
                                 <td><span class="pattern-badge badge-{{ pattern }}">{{ pattern }}</span></td>
                                 <td>{{ count }}</td>
                             </tr>
                             {% endfor %}
                         </tbody>
                     </table>
-                    {% if stats.patterns|length > 3 %}
-                    <div class="text-center mt-2">
-                        <button class="btn btn-outline-primary btn-sm" id="btn-show-breakdown" onclick="toggleRows('breakdown-row', 'btn-show-breakdown')">Show More</button>
-                    </div>
-                    {% endif %}
                 </div>
             </div>
         </div>
         {% endif %}
 
-        <!-- main table -->
+        <!-- IP Intelligence section -->
+        {% if has_intel and stats.top_countries %}
+        <div class="row mb-4">
+            <div class="col-md-6">
+                <div class="card p-3">
+                    <h5>Top Attacker Countries</h5>
+                    <div id="countryChartContainer">
+                        <canvas id="countryChart" data-labels='{{ country_labels | safe }}' data-counts='{{ country_data | safe }}'></canvas>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card p-3">
+                    <h5>Top ASN / ISP</h5>
+                    <table class="table table-sm mt-3">
+                        <thead>
+                            <tr>
+                                <th>ASN</th>
+                                <th>ISP</th>
+                                <th>Sessions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="asn-tbody">
+                            {% for asn, isp, cnt in stats.top_asns %}
+                            <tr>
+                                <td><code>{{ asn }}</code></td>
+                                <td>{{ isp }}</td>
+                                <td>{{ cnt }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- main table — skeleton is ALWAYS rendered so the live poller (live.js)
+             can always find the <tbody> and repaint rows without a page reload.
+             The number of intel columns is exposed via data-has-intel. -->
         <div class="card p-3">
-            <h5>Correlated Sessions</h5>
-            {% if correlations %}
+            <h5>Correlated Sessions <small class="text-muted">(latest 20, live)</small></h5>
             <div class="table-responsive">
-                <table class="table table-striped table-hover">
+                <table class="table table-striped table-hover" data-has-intel="{{ 1 if has_intel else 0 }}">
                     <thead>
                         <tr>
                             <th>Timestamp</th>
                             <th>Source IP</th>
+                            {% if has_intel %}
+                            <th>Country</th>
+                            <th>ISP</th>
+                            {% endif %}
                             <th>Pattern</th>
                             <th>Cowrie</th>
                             <th>Dionaea</th>
@@ -95,10 +143,32 @@
                         </tr>
                     </thead>
                     <tbody>
-                        {% for row in correlations %}
-                        <tr class="{% if loop.index > 3 %}d-none session-row{% endif %}">
+                        {% for row in correlations[:20] %}
+                        <tr class="{% if loop.index > 10 %}d-none session-row{% endif %}">
                             <td>{{ row["timestamp"][:19] }}</td>
-                            <td><code>{{ row["source_ip"] }}</code></td>
+                            <td>
+                                <a href="/ip/{{ row['source_ip'] }}" class="ip-link">
+                                    <code>{{ row["source_ip"] }}</code>
+                                </a>
+                                {% if has_intel and row["is_proxy"] %}
+                                    <span class="badge bg-warning text-dark ms-1">VPN</span>
+                                {% endif %}
+                                {% if has_intel and row["is_hosting"] %}
+                                    <span class="badge bg-info text-dark ms-1">Cloud</span>
+                                {% endif %}
+                            </td>
+                            {% if has_intel %}
+                            <td>
+                                {% if row["country_code"] %}
+                                    <img src="https://flagcdn.com/16x12/{{ row['country_code']|lower }}.png"
+                                         alt="{{ row['country_code'] }}" class="me-1">
+                                    {{ row["country"] or "-" }}
+                                {% else %}
+                                    -
+                                {% endif %}
+                            </td>
+                            <td>{{ row["isp"] or "-" }}</td>
+                            {% endif %}
                             <td><span class="pattern-badge badge-{{ row['pattern'] }}">{{ row["pattern"] }}</span></td>
                             <td>{{ row["hits_cowrie"] }}</td>
                             <td>{{ row["hits_dionaea"] }}</td>
@@ -106,18 +176,23 @@
                             <td>{{ row["first_seen"][:19] if row["first_seen"] else "-" }}</td>
                             <td>{{ row["last_seen"][:19] if row["last_seen"] else "-" }}</td>
                         </tr>
+                        {% else %}
+                        <tr id="empty-sessions-row">
+                            <td colspan="11" class="text-muted text-center py-3">
+                                No correlated sessions yet. Wait for the correlator to process some events.
+                            </td>
+                        </tr>
                         {% endfor %}
                     </tbody>
                 </table>
             </div>
-            {% if correlations|length > 3 %}
             <div class="text-center mt-2">
-                <button class="btn btn-outline-primary btn-sm" id="btn-show-sessions" onclick="toggleRows('session-row', 'btn-show-sessions')">Show More</button>
+                <button class="btn btn-outline-primary btn-sm" id="btn-show-sessions"
+                        onclick="toggleRows('session-row', 'btn-show-sessions')"
+                        style="{% if correlations|length <= 10 %}display:none{% endif %}">
+                    Show More ({{ correlations[:20]|length - 10 if correlations[:20]|length > 10 else 0 }} hidden)
+                </button>
             </div>
-            {% endif %}
-            {% else %}
-            <p class="text-muted mt-3">No correlated sessions yet. Wait for the correlator to process some events.</p>
-            {% endif %}
         </div>
 
         <footer class="text-center text-muted mt-4 mb-3">
@@ -126,6 +201,7 @@
     </div>
 
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/live.js') }}"></script>
 
 </body>
 

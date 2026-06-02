@@ -67,3 +67,48 @@ body {
     height: 300px;
     margin: 0 auto;
 }
+
+#countryChartContainer {
+    max-width: 450px;
+    height: 300px;
+    margin: 0 auto;
+}
+
+/* ── Live indicator ────────────────────────────────────────────────────────── */
+
+/* pulsing dot inside the Live badge */
+.live-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: white;
+    animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%       { opacity: 0.4; transform: scale(0.7); }
+}
+
+/* brief yellow flash on a stat card number when its value changes */
+@keyframes statFlash {
+    0%   { color: #f39c12; }
+    100% { color: #333; }
+}
+
+.stat-updated {
+    animation: statFlash 0.6s ease-out;
+}
+
+/* clickable IP links */
+.ip-link {
+    text-decoration: none;
+}
+
+.ip-link:hover code {
+    background-color: #0d6efd;
+    color: white;
+    border-radius: 4px;
+    padding: 2px 4px;
+}
