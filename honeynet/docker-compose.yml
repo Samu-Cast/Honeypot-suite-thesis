@@ -48,6 +48,11 @@ services:
     container_name: correlator_hy
     restart: unless-stopped
     # no ports, it just reads logs and writes to its own db
+    environment:
+      # Tune these without touching the source code.
+      - SESSION_WINDOW_SECS=15
+      - BRUTE_FORCE_THRESHOLD=5
+      - ALERT_POLL_SECS=30
     volumes:
       - ./cowrie/logs:/logs/cowrie:ro
       - ./opencanary/logs:/logs/opencanary:ro
@@ -66,7 +71,7 @@ services:
       - "8888:5000"  # web UI
     volumes:
       - ./dashboard:/app
-      - ./correlator/output:/data:ro
+      - ./correlator/output:/data
     networks:
       honeynet_net:
         ipv4_address: 172.20.0.21

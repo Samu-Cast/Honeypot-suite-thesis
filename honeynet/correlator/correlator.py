@@ -2,26 +2,42 @@ import os
 import json
 import sqlite3
 import time
-from datetime import datetime, timedelta
+import queue
+from datetime import datetime, timedelta, timezone
 import threading
+from urllib.request import urlopen, Request
+from urllib.error import URLError
 
-# paths inside the container (mapped via docker-compose volumes)
+ALERTS_LOG = "/output/alerts.log"
 COWRIE_LOG = "/logs/cowrie/cowrie.json"
 OPENCANARY_LOG = "/logs/opencanary/opencanary.log"
 DIONAEA_DB = "/data/dionaea/dionaea.sqlite"
 OUTPUT_DB = "/output/correlations.db"
-AGGREGATION_INTERVAL = 2  # how often to check for expired sessions (secs)
-SESSION_WINDOW = timedelta(seconds=15)  # sessions older than this get processed
+AGGREGATION_INTERVAL = 2
 
-# shared dict to collect events from all the reader threads
+SESSION_WINDOW = timedelta(seconds=int(os.environ.get("SESSION_WINDOW_SECS", "15")))
+BRUTE_FORCE_THRESHOLD = int(os.environ.get("BRUTE_FORCE_THRESHOLD", "5"))
+
+print(f"[config] SESSION_WINDOW={SESSION_WINDOW.seconds}s  BRUTE_FORCE_THRESHOLD={BRUTE_FORCE_THRESHOLD}")
+
 events_lock = threading.Lock()
-# { ip_address: [ {timestamp, source, event_type, detail}, ... ] }
-active_sessions = {}
+active_sessions = {}  # { ip: [ {timestamp, source, event_type, detail}, ... ] }
+
+enrich_queue = queue.Queue()
+known_ips = set()
+known_ips_lock = threading.Lock()
+
+
+def get_db_conn(path=OUTPUT_DB):
+    """Open a SQLite connection with a write timeout so concurrent threads
+    don't crash with 'database is locked' under load."""
+    return sqlite3.connect(path, timeout=10)
 
 
 def init_db():
     os.makedirs(os.path.dirname(OUTPUT_DB), exist_ok=True)
-    conn = sqlite3.connect(OUTPUT_DB)
+    conn = get_db_conn()
+    conn.execute("PRAGMA journal_mode=WAL")
     cursor = conn.cursor()
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS correlations (
@@ -33,10 +49,70 @@ def init_db():
             hits_dionaea INTEGER,
             hits_opencanary INTEGER,
             first_seen DATETIME,
-            last_seen DATETIME
+            last_seen DATETIME,
+            UNIQUE(source_ip, first_seen)
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS ip_intel (
+            ip TEXT PRIMARY KEY,
+            country TEXT,
+            country_code TEXT,
+            city TEXT,
+            lat REAL,
+            lon REAL,
+            isp TEXT,
+            org TEXT,
+            asn TEXT,
+            reverse_dns TEXT,
+            is_proxy INTEGER DEFAULT 0,
+            is_hosting INTEGER DEFAULT 0,
+            last_updated DATETIME
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS pending_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_ip TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            source TEXT NOT NULL,
+            event_type TEXT,
+            detail TEXT
         )
     ''')
     conn.commit()
+
+    cursor.execute("SELECT ip FROM ip_intel")
+    with known_ips_lock:
+        for row in cursor.fetchall():
+            known_ips.add(row[0])
+    print(f"[init] Loaded {len(known_ips)} already-enriched IPs from cache")
+
+    # restore in-flight events that were not finalized before last shutdown
+    cursor.execute("SELECT id, source_ip, timestamp, source, event_type, detail FROM pending_events")
+    recovered = cursor.fetchall()
+    if recovered:
+        print(f"[init] Recovering {len(recovered)} in-flight events...")
+        for row in recovered:
+            row_id, src_ip, ts_str, src, evt_type, detail = row
+            try:
+                ts = datetime.fromisoformat(ts_str)
+                if ts.tzinfo is not None:
+                    ts = ts.astimezone(timezone.utc).replace(tzinfo=None)
+            except Exception:
+                ts = datetime.utcnow()
+            with events_lock:
+                if src_ip not in active_sessions:
+                    active_sessions[src_ip] = []
+                active_sessions[src_ip].append({
+                    'timestamp': ts,
+                    'source': src,
+                    'event_type': evt_type,
+                    'detail': detail,
+                    'pending_rowid': row_id,
+                })
+        print(f"[init] Recovery complete — {len(active_sessions)} sessions restored")
+
     conn.close()
 
 
@@ -44,30 +120,55 @@ def add_event(source_ip, timestamp, source, event_type, detail):
     if not source_ip:
         return
 
+    with known_ips_lock:
+        if source_ip not in known_ips:
+            known_ips.add(source_ip)
+            enrich_queue.put(source_ip)
+
     with events_lock:
         if source_ip not in active_sessions:
             active_sessions[source_ip] = []
 
-        # try to parse timestamp string into datetime obj
         if isinstance(timestamp, str):
             try:
-                timestamp = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                ts_parsed = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                # normalise to naive UTC regardless of the original timezone offset
+                if ts_parsed.tzinfo is not None:
+                    ts_parsed = ts_parsed.astimezone(timezone.utc).replace(tzinfo=None)
+                timestamp = ts_parsed
             except Exception:
-                timestamp = datetime.now()
-
-        if getattr(timestamp, 'tzinfo', None):
-            timestamp = timestamp.replace(tzinfo=None)
+                timestamp = datetime.utcnow()
 
         active_sessions[source_ip].append({
             'timestamp': timestamp,
             'source': source,
             'event_type': event_type,
-            'detail': detail
+            'detail': detail,
+            'pending_rowid': None,  # filled in below, outside the lock
         })
+
+    # DB write is outside events_lock to avoid holding the lock during I/O.
+    # We update the pending_rowid on the last element we just appended.
+    try:
+        pconn = get_db_conn()
+        cur = pconn.execute(
+            "INSERT INTO pending_events (source_ip, timestamp, source, event_type, detail) VALUES (?, ?, ?, ?, ?)",
+            (source_ip, timestamp.isoformat() if isinstance(timestamp, datetime) else str(timestamp),
+             source, event_type, str(detail)[:500])
+        )
+        pending_rowid = cur.lastrowid
+        pconn.commit()
+        pconn.close()
+        # back-fill the rowid so process_session() can do a precise DELETE
+        with events_lock:
+            sessions = active_sessions.get(source_ip)
+            if sessions:
+                sessions[-1]['pending_rowid'] = pending_rowid
+    except Exception as e:
+        print(f"[pending] Write error: {e}")
 
 
 def follow_file(filename, source_name):
-    """keeps reading new lines appended to a file, like tail -f"""
     while not os.path.exists(filename):
         time.sleep(1)
 
@@ -81,7 +182,6 @@ def follow_file(filename, source_name):
 
 
 def tail_cowrie():
-    """reads cowrie json log line by line and sends events to the correlator"""
     for line in follow_file(COWRIE_LOG, 'cowrie'):
         try:
             data = json.loads(line)
@@ -95,7 +195,6 @@ def tail_cowrie():
 
 
 def tail_opencanary():
-    """reads opencanary log and sends events to the correlator"""
     for line in follow_file(OPENCANARY_LOG, 'opencanary'):
         try:
             data = json.loads(line)
@@ -110,7 +209,6 @@ def tail_opencanary():
 
 
 def poll_dionaea():
-    """polls dionaea sqlite db every 5 secs looking for new connections"""
     last_rowid = 0
     while True:
         if os.path.exists(DIONAEA_DB):
@@ -129,12 +227,12 @@ def poll_dionaea():
                     rowid, ts_epoch, src_ip, proto = row
                     last_rowid = rowid
                     if src_ip and ts_epoch:
-                        ts = datetime.fromtimestamp(ts_epoch)
+                        ts = datetime.utcfromtimestamp(ts_epoch)
                         add_event(src_ip, ts, 'dionaea', proto, f"Protocol: {proto}")
 
                 conn.close()
             except sqlite3.OperationalError:
-                pass  # db locked or not ready yet
+                pass
             except Exception as e:
                 print(f"Dionaea poll error: {e}")
 
@@ -142,24 +240,20 @@ def poll_dionaea():
 
 
 def analyze_and_aggregate():
-    """every AGGREGATION_INTERVAL secs, checks if any session expired
-    and if so processes it"""
     while True:
         time.sleep(AGGREGATION_INTERVAL)
-        now = datetime.now()
+        now = datetime.utcnow()
 
         with events_lock:
             for ip, events in list(active_sessions.items()):
                 if not events:
                     continue
 
-                # Sort events by timestamp to process chronologically
                 events.sort(key=lambda x: x['timestamp'])
-                
-                # Split events into distinct sessions if the gap between them is > SESSION_WINDOW
+
                 sessions_to_process = []
                 current_session = [events[0]]
-                
+
                 for e in events[1:]:
                     gap = e['timestamp'] - current_session[-1]['timestamp']
                     if gap > SESSION_WINDOW:
@@ -170,58 +264,216 @@ def analyze_and_aggregate():
                 sessions_to_process.append(current_session)
 
                 latest_event_time = current_session[-1]['timestamp']
-                # strip timezone if present, otherwise comparison with now() breaks
-                if latest_event_time.tzinfo:
-                    latest_event_time = latest_event_time.replace(tzinfo=None)
+                # timestamps are already naive UTC at this point
 
-                # if no new events came in for longer than SESSION_WINDOW, finalize
                 if now - latest_event_time > SESSION_WINDOW:
                     for s in sessions_to_process:
                         process_session(ip, s)
                     del active_sessions[ip]
 
 
+def classify_pattern(cowrie_hits, dionaea_hits, opencanary_hits, threshold=None):
+    if threshold is None:
+        threshold = BRUTE_FORCE_THRESHOLD
+
+    if cowrie_hits > 0 and dionaea_hits > 0 and opencanary_hits > 0:
+        return "FULL_SPECTRUM"
+    elif cowrie_hits > 0 and dionaea_hits > 0:
+        return "SSH_THEN_PAYLOAD"
+    elif cowrie_hits > 0 and opencanary_hits > 0:
+        return "SSH_THEN_LATERAL"
+    elif dionaea_hits > 0 and opencanary_hits > 0:
+        return "PAYLOAD_AND_LATERAL"
+    elif cowrie_hits > threshold:
+        return "BRUTE_FORCE_SSH"
+    elif dionaea_hits > 0:
+        return "AUTOMATED_EXPLOIT"
+    elif opencanary_hits > 0:
+        return "RECON_ONLY"
+    elif cowrie_hits > 0:
+        return "LOW_SSH_ACTIVITY"
+    return "UNKNOWN"
+
+
 def process_session(ip, events):
-    """classifies the attack pattern based on which honeypots got hit, then saves to db"""
     cowrie_hits = sum(1 for e in events if e['source'] == 'cowrie')
     dionaea_hits = sum(1 for e in events if e['source'] == 'dionaea')
     opencanary_hits = sum(1 for e in events if e['source'] == 'opencanary')
 
-    # figure out what kind of attack this looks like
-    pattern = "UNKNOWN"
-
-    if cowrie_hits > 0 and dionaea_hits > 0 and opencanary_hits > 0:
-        pattern = "FULL_SPECTRUM"         # hit everything
-    elif cowrie_hits > 0 and dionaea_hits > 0:
-        pattern = "SSH_THEN_PAYLOAD"      # ssh bruteforce + tried exploits
-    elif cowrie_hits > 0 and opencanary_hits > 0:
-        pattern = "SSH_THEN_LATERAL"      # ssh + lateral movement attempt
-    elif dionaea_hits > 0 and opencanary_hits > 0:
-        pattern = "PAYLOAD_AND_LATERAL"
-    elif cowrie_hits > 5:
-        pattern = "BRUTE_FORCE_SSH"       # lots of ssh login attempts
-    elif dionaea_hits > 0:
-        pattern = "AUTOMATED_EXPLOIT"
-    elif opencanary_hits > 0:
-        pattern = "RECON_ONLY"
-    elif cowrie_hits > 0:
-        pattern = "LOW_SSH_ACTIVITY"
+    pattern = classify_pattern(cowrie_hits, dionaea_hits, opencanary_hits)
 
     first_seen = min([e['timestamp'] for e in events])
     last_seen = max([e['timestamp'] for e in events])
 
     try:
-        conn = sqlite3.connect(OUTPUT_DB)
+        conn = get_db_conn()
         cursor = conn.cursor()
         cursor.execute('''
-            INSERT INTO correlations (timestamp, source_ip, pattern, hits_cowrie, hits_dionaea, hits_opencanary, first_seen, last_seen)
+            INSERT OR IGNORE INTO correlations (timestamp, source_ip, pattern, hits_cowrie, hits_dionaea, hits_opencanary, first_seen, last_seen)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (datetime.now(), ip, pattern, cowrie_hits, dionaea_hits, opencanary_hits, first_seen, last_seen))
+        ''', (datetime.utcnow(), ip, pattern, cowrie_hits, dionaea_hits, opencanary_hits, first_seen, last_seen))
+
+        rowids = [e['pending_rowid'] for e in events if e.get('pending_rowid')]
+        if rowids:
+            placeholders = ",".join("?" * len(rowids))
+            cursor.execute(f"DELETE FROM pending_events WHERE id IN ({placeholders})", rowids)
+
         conn.commit()
         conn.close()
         print(f"[+] {ip} -> {pattern} (cowrie:{cowrie_hits} dionaea:{dionaea_hits} canary:{opencanary_hits})")
     except Exception as e:
         print(f"Error saving to db: {e}")
+
+
+def enrich_ip(ip):
+    url = (
+        f"http://ip-api.com/json/{ip}"
+        f"?fields=status,country,countryCode,city,lat,lon,isp,org,as,reverse,proxy,hosting"
+    )
+    try:
+        req = Request(url, headers={"User-Agent": "HoneynetCorrelator/1.0"})
+        with urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+
+        if data.get("status") != "success":
+            print(f"[enrich] ip-api returned fail for {ip}: {data}")
+            return None
+
+        return {
+            "ip": ip,
+            "country": data.get("country"),
+            "country_code": data.get("countryCode"),
+            "city": data.get("city"),
+            "lat": data.get("lat"),
+            "lon": data.get("lon"),
+            "isp": data.get("isp"),
+            "org": data.get("org"),
+            "asn": data.get("as", "").split()[0] if data.get("as") else None,
+            "reverse_dns": data.get("reverse"),
+            "is_proxy": 1 if data.get("proxy") else 0,
+            "is_hosting": 1 if data.get("hosting") else 0,
+        }
+    except (URLError, OSError, json.JSONDecodeError) as e:
+        print(f"[enrich] Error enriching {ip}: {e}")
+        return None
+
+
+def save_intel(intel):
+    try:
+        conn = get_db_conn()
+        conn.execute('''
+            INSERT OR REPLACE INTO ip_intel
+            (ip, country, country_code, city, lat, lon, isp, org, asn,
+             reverse_dns, is_proxy, is_hosting, last_updated)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            intel["ip"], intel["country"], intel["country_code"],
+            intel["city"], intel["lat"], intel["lon"],
+            intel["isp"], intel["org"], intel["asn"],
+            intel["reverse_dns"], intel["is_proxy"], intel["is_hosting"],
+            datetime.utcnow().isoformat()
+        ))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[enrich] DB error saving intel for {intel['ip']}: {e}")
+
+
+HIGH_SEVERITY_PATTERNS = {"FULL_SPECTRUM", "SSH_THEN_LATERAL", "SSH_THEN_PAYLOAD", "PAYLOAD_AND_LATERAL"}
+ALERT_WEBHOOK_URL = os.environ.get("ALERT_WEBHOOK_URL", "")
+_last_alerted_id = 0
+
+
+def send_alert(row):
+    ip       = row["source_ip"]
+    pattern  = row["pattern"]
+    ts       = row["timestamp"][:19] if row["timestamp"] else "?"
+    cowrie   = row["hits_cowrie"]
+    dionaea  = row["hits_dionaea"]
+    canary   = row["hits_opencanary"]
+    country  = row["country"]  if row["country"]  else "?"
+    isp      = row["isp"]      if row["isp"]      else "?"
+    is_proxy = bool(row["is_proxy"]) if row["is_proxy"] else False
+
+    line = (
+        f"[ALERT] {ts} | {pattern} | {ip} | {country} / {isp} | "
+        f"proxy={is_proxy} | cowrie={cowrie} dionaea={dionaea} canary={canary}"
+    )
+
+    try:
+        with open(ALERTS_LOG, "a") as f:
+            f.write(line + "\n")
+    except Exception as e:
+        print(f"[alert] Could not write to alerts.log: {e}")
+
+    print(f"[alert] {line}")
+
+    if ALERT_WEBHOOK_URL:
+        try:
+            payload = json.dumps({"content": f"**Honeynet Alert**\n```\n{line}\n```"}).encode()
+            req = Request(
+                ALERT_WEBHOOK_URL,
+                data=payload,
+                headers={"Content-Type": "application/json", "User-Agent": "HoneynetCorrelator/1.0"},
+                method="POST"
+            )
+            with urlopen(req, timeout=5):
+                pass
+        except Exception as e:
+            print(f"[alert] Webhook error: {e}")
+
+
+def alert_worker():
+    global _last_alerted_id
+    ALERT_POLL_INTERVAL = int(os.environ.get("ALERT_POLL_SECS", "30"))
+
+    try:
+        conn = get_db_conn()
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT MAX(id) FROM correlations").fetchone()
+        if row and row[0]:
+            _last_alerted_id = row[0]
+        conn.close()
+    except Exception:
+        pass
+
+    print(f"[alert] Started (poll every {ALERT_POLL_INTERVAL}s, watermark id={_last_alerted_id})")
+
+    while True:
+        time.sleep(ALERT_POLL_INTERVAL)
+        try:
+            conn = get_db_conn()
+            conn.row_factory = sqlite3.Row
+
+            placeholders = ",".join("?" * len(HIGH_SEVERITY_PATTERNS))
+            rows = conn.execute(f"""
+                SELECT c.*, i.country, i.isp, i.is_proxy
+                FROM correlations c
+                LEFT JOIN ip_intel i ON c.source_ip = i.ip
+                WHERE c.id > ? AND c.pattern IN ({placeholders})
+                ORDER BY c.id ASC
+            """, (_last_alerted_id, *HIGH_SEVERITY_PATTERNS)).fetchall()
+
+            for row in rows:
+                send_alert(row)
+                _last_alerted_id = max(_last_alerted_id, row["id"])
+
+            conn.close()
+        except Exception as e:
+            print(f"[alert] Poll error: {e}")
+
+
+def enrichment_worker():
+    while True:
+        ip = enrich_queue.get()
+        intel = enrich_ip(ip)
+        if intel:
+            save_intel(intel)
+            print(f"[enrich] {ip} -> {intel['country']} | {intel['isp']} | {intel['asn']}")
+        else:
+            print(f"[enrich] {ip} -> failed (private/reserved?)")
+        enrich_queue.task_done()
+        time.sleep(1.5)
 
 
 if __name__ == "__main__":
@@ -232,13 +484,14 @@ if __name__ == "__main__":
         threading.Thread(target=tail_cowrie, daemon=True),
         threading.Thread(target=tail_opencanary, daemon=True),
         threading.Thread(target=poll_dionaea, daemon=True),
-        threading.Thread(target=analyze_and_aggregate, daemon=True)
+        threading.Thread(target=analyze_and_aggregate, daemon=True),
+        threading.Thread(target=enrichment_worker, daemon=True),
+        threading.Thread(target=alert_worker, daemon=True),
     ]
 
     for t in threads:
         t.start()
 
-    # keep main thread alive so daemon threads keep running
     try:
         while True:
             time.sleep(1)
