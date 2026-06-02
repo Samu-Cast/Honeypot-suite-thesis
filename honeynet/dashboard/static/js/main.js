@@ -12,6 +12,7 @@ document.addEventListener('DOMContentLoaded', function() {
         'UNKNOWN':            '#bdc3c7'
     };
 
+    // ── Pattern doughnut chart ─────────────────────────────────────────
     const chartCanvas = document.getElementById('patternChart');
     if (chartCanvas) {
         const labels = JSON.parse(chartCanvas.getAttribute('data-labels'));
@@ -22,7 +23,9 @@ document.addEventListener('DOMContentLoaded', function() {
             return PATTERN_COLORS[label] || '#bdc3c7';
         });
 
-        new Chart(chartCanvas, {
+        // store the colour map + instance globally so live.js can repaint it
+        window.PATTERN_COLORS = PATTERN_COLORS;
+        window.__patternChart = new Chart(chartCanvas, {
             type: 'doughnut',
             data: {
                 labels: labels,
@@ -41,6 +44,43 @@ document.addEventListener('DOMContentLoaded', function() {
                             boxWidth: 12
                         }
                     }
+                }
+            }
+        });
+    }
+
+    // ── Country bar chart ──────────────────────────────────────────────
+    const countryCanvas = document.getElementById('countryChart');
+    if (countryCanvas) {
+        const labels = JSON.parse(countryCanvas.getAttribute('data-labels'));
+        const data = JSON.parse(countryCanvas.getAttribute('data-counts'));
+
+        // generate a color gradient for the bars
+        const barColors = labels.map(function(_, i) {
+            const hue = (i * 37) % 360;  // spread colors around the wheel
+            return `hsl(${hue}, 65%, 55%)`;
+        });
+
+        window.__countryChart = new Chart(countryCanvas, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Attack Sessions',
+                    data: data,
+                    backgroundColor: barColors,
+                    borderRadius: 4
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                indexAxis: 'y',
+                plugins: {
+                    legend: { display: false }
+                },
+                scales: {
+                    x: { beginAtZero: true, ticks: { precision: 0 } }
                 }
             }
         });
