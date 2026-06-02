@@ -1,68 +1,169 @@
-# Honeypot Suite - Tesi Triennale in Informatica
+# Honeypot Suite
 
-Progetto di tesi triennale incentrato sull'implementazione, il deployment e l'analisi di diverse tipologie di honeypot per lo studio delle minacce informatiche tramite un'architettura centralizzata **Infrastructure as Code** (Docker Compose).
+Progetto di tesi triennale — Università degli Studi di L'Aquila.
 
-## Struttura del progetto
+Un'infrastruttura honeynet completa: tre honeypot containerizzati, un correlatore Python multi-thread che li osserva in tempo reale, e una dashboard web live. L'intero stack parte con un singolo comando.
 
-Il repository è organizzato in una struttura piatta che contiene le configurazioni dei singoli sensori, orchestrati tramite un unico file Docker Compose.
+---
 
-```text
-.
-├── honeynet/
-│   ├── docker-compose.yml       # Orchestratore per avviare l'intera Honeynet
-│   ├── cowrie/                  # Configurazione e Log per Cowrie (SSH/Telnet)
-│   ├── dionaea/                 # Configurazione, Log e Malware per Dionaea (Multi-protocol)
-│   ├── opencanary/              # Configurazione e Log per OpenCanary (Alerting interno)
-│   ├── correlator/              # Script Python custom e database SQLite per la correlazione
-│   ├── dashboard/               # Web dashboard (Flask) per visualizzare i risultati
-│   └── test/                    # Script per generare eventi di test
-└── README.md
+## Architettura
+
+```
+                        ┌─────────────────────────────┐
+  Internet / LAN        │         Docker network        │
+  attacker traffic      │         172.20.0.0/24         │
+        │               │                               │
+        ├──SSH/Telnet──▶│  Cowrie       172.20.0.10    │
+        ├──SMB/FTP/HTTP▶│  Dionaea      172.20.0.11    │
+        └──interno──────│  OpenCanary   172.20.0.12    │
+                        │                               │
+                        │  Correlator   172.20.0.20    │──▶ correlations.db
+                        │  Dashboard    172.20.0.21    │──▶ :8888
+                        └─────────────────────────────┘
 ```
 
-## Honeypots Inclusi
+### Honeypot
 
-| Nome | Tipo | Descrizione |
-|------|------|-------------|
-| **Cowrie** | Media Interazione | Emula servizi SSH e Telnet, cattura credenziali brute-force e sessioni interattive. |
-| **Dionaea** | Bassa Interazione | Espone vulnerabilità su SMB, FTP, HTTP, ecc. per catturare malware automatizzati. |
-| **OpenCanary** | Bassa Interazione | Demone progettato per far scattare alert ad alta fedeltà quando un attaccante sonda la rete locale. |
+| Sensore | Protocolli | Tipo |
+|---|---|---|
+| **Cowrie** | SSH (22), Telnet (23) | Media interazione — emula una shell, cattura credenziali e sessioni |
+| **Dionaea** | SMB (445), FTP (21), HTTP/S (80/443), MySQL (3306) | Bassa interazione — cattura payload e malware automatizzati |
+| **OpenCanary** | Rete interna | Tripwire — scatta alert ad alta fedeltà su movimento laterale |
 
-## Componenti Custom
+### Correlatore
 
-| Nome | Descrizione |
-|------|-------------|
-| **Correlator** | Demone Python che legge i log di tutti gli honeypot in tempo reale, correla gli eventi per IP sorgente e classifica i pattern di attacco (es. `BRUTE_FORCE_SSH`, `FULL_SPECTRUM`). I risultati vengono salvati in un database SQLite. |
-| **Dashboard** | Interfaccia web (Flask) accessibile su `http://localhost:8888` che mostra le sessioni correlate, statistiche e un grafico dei pattern rilevati. |
+Demone Python con 6 thread che:
 
-## Deployment (Come avviare l'infrastruttura)
+1. **Legge** i log dei tre honeypot in coda condivisa (producer)
+2. **Correla** gli eventi per IP sorgente dentro una finestra temporale (`SESSION_WINDOW_SECS`)
+3. **Classifica** ogni sessione in uno dei 9 pattern di attacco (funzione pura `classify_pattern`)
+4. **Arricchisce** ogni IP con geolocalizzazione, ISP, ASN e flag proxy/hosting via `ip-api.com`
+5. **Persiste** tutto in SQLite con WAL mode, idempotente ai riavvii
+6. **Allerta** su pattern ad alta severità via log strutturato e webhook opzionale (Discord/Slack)
 
-L'intero ambiente è containerizzato con Docker. Non è necessario installare i singoli honeypot sul sistema host.
+### Pattern di attacco riconosciuti
 
-1. **Requisiti**: Assicurati di avere `docker` e `docker-compose` (o `docker compose`) installati.
-2. **Avvio**: Naviga nella cartella `honeynet` ed esegui il seguente comando:
-   ```bash
-   cd honeynet
-   docker compose up -d --build
-   ```
-3. **Dashboard**: Una volta avviato, la dashboard è raggiungibile su `http://localhost:8888`.
-4. **Log e Output**: I log dei singoli honeypot verranno generati all'interno delle rispettive cartelle (es. `cowrie/logs`, `opencanary/logs`), mentre il correlatore analizzerà gli eventi in tempo reale e li salverà in `correlator/output/correlations.db`.
+| Pattern | Descrizione |
+|---|---|
+| `FULL_SPECTRUM` | Tutti e tre i sensori colpiti — attacco coordinato |
+| `SSH_THEN_PAYLOAD` | Brute-force SSH seguita da exploit di servizio |
+| `SSH_THEN_LATERAL` | Brute-force SSH seguita da movimento laterale |
+| `PAYLOAD_AND_LATERAL` | Exploit + movimento laterale, senza SSH |
+| `BRUTE_FORCE_SSH` | SSH massivo oltre soglia, no payload |
+| `AUTOMATED_EXPLOIT` | Solo Dionaea — scanner/worm automatizzato |
+| `RECON_ONLY` | Solo OpenCanary — ricognizione interna |
+| `LOW_SSH_ACTIVITY` | SSH sotto soglia — sonda isolata |
+| `UNKNOWN` | Pattern non classificato |
 
-## Testing
+---
 
-Per verificare il funzionamento del correlatore senza generare traffico reale, è disponibile uno script di test:
+## Avvio rapido
+
+**Requisiti**: Docker, Docker Compose, Python 3.
+
+```bash
+# Prima esecuzione (o reset completo)
+./clean.sh && ./run.sh
+```
+
+`run.sh` esegue in ordine: fix permessi sui file di log, build delle immagini custom (correlatore e dashboard), avvio dello stack, iniezione degli eventi di test via `simulate_attack.py`.
+
+**Dashboard**: [http://localhost:8888](http://localhost:8888)
+
+### Avvio manuale (senza test)
 
 ```bash
 cd honeynet
-python3 test/simulate_attack.py
+docker compose up -d --build
 ```
 
-Lo script genera eventi fittizi (connessioni SSH, alert FTP/HTTP, connessioni SMB) da 3 IP diversi. Dopo circa 60 secondi il correlatore li processerà e i risultati saranno visibili nella dashboard.
+### Configurazione senza rebuild
 
-## Note sulla sicurezza
+Le soglie del correlatore si modificano in `docker-compose.yml` nella sezione `environment` del servizio `correlator`, senza toccare il codice:
+
+```yaml
+environment:
+  - SESSION_WINDOW_SECS=15       # finestra di correlazione in secondi
+  - BRUTE_FORCE_THRESHOLD=5      # hit SSH per classificare come brute-force
+  - ALERT_POLL_SECS=30           # frequenza polling alert worker
+  - ALERT_WEBHOOK_URL=https://…  # webhook Discord/Slack (opzionale)
+```
+
+---
+
+## Struttura del repository
+
+```
+.
+├── honeynet/
+│   ├── docker-compose.yml
+│   ├── cowrie/
+│   │   ├── config/cowrie.cfg
+│   │   └── logs/               # runtime, gitignored (.gitkeep tracciato)
+│   ├── dionaea/
+│   │   ├── logs/               # runtime, gitignored
+│   │   ├── data/               # SQLite Dionaea, gitignored
+│   │   └── malware/            # payload catturati, gitignored
+│   ├── opencanary/
+│   │   ├── opencanary.conf
+│   │   └── logs/               # runtime, gitignored
+│   ├── correlator/
+│   │   ├── Dockerfile
+│   │   ├── correlator.py       # demone principale, 6 thread
+│   │   └── output/             # correlations.db, gitignored
+│   ├── dashboard/
+│   │   ├── Dockerfile
+│   │   ├── app.py              # Flask + /api/stats JSON endpoint
+│   │   ├── templates/
+│   │   │   ├── index.html      # dashboard principale, live via AJAX
+│   │   │   └── ip_detail.html  # pagina dettaglio per singolo IP
+│   │   └── static/
+│   │       ├── css/style.css
+│   │       ├── js/main.js      # grafici Chart.js
+│   │       └── js/live.js      # polling AJAX ogni 10s
+│   └── test/
+│       ├── simulate_attack.py  # generatore eventi fittizi
+│       ├── test_correlator.py  # 22 test pytest su classify_pattern
+│       ├── cowrie/logs/        # runtime, gitignored
+│       ├── opencanary/logs/    # runtime, gitignored
+│       └── dionaea/data/       # runtime, gitignored
+├── run.sh
+├── clean.sh
+└── README.md
+```
+
+---
+
+## Testing
+
+```bash
+# Genera eventi fittizi (richiede lo stack Docker attivo)
+cd honeynet
+python3 test/simulate_attack.py
+
+# Unit test della logica di classificazione (nessun Docker necessario)
+cd honeynet/test
+pytest test_correlator.py -v
+```
+
+I 22 test coprono tutti i pattern, i casi limite sulla soglia, la gerarchia di priorità, e la configurabilità via parametro.
+
+---
+
+## Proprietà sistemistiche
+
+| Proprietà | Meccanismo |
+|---|---|
+| **Idempotenza** | `UNIQUE(source_ip, first_seen)` + `INSERT OR IGNORE` — i riavvii non duplicano dati |
+| **Durabilità** | Tabella `pending_events` come WAL; cleanup per rowid precisi |
+| **Correttezza temporale** | Tutti i timestamp normalizzati a naive UTC in ingresso |
+| **Concorrenza SQLite** | `PRAGMA journal_mode=WAL` + `timeout=10` su ogni connessione |
+| **Configurabilità** | Soglie via env vars, nessun rebuild necessario |
+| **Testabilità** | `classify_pattern()` funzione pura senza effetti collaterali |
+| **Osservabilità** | `/api/stats` JSON + polling AJAX 10s con badge Live |
+| **Alerting** | `alert_worker` con watermark — no falsi positivi su dati storici |
+
+---
 
 > [!CAUTION]
-> Questo progetto è realizzato a scopo didattico e di ricerca. Gli honeypot sono sistemi pensati per essere esposti ad attacchi: **non vanno mai deployati su reti di produzione o segmenti non isolati**. Assicurarsi di simulare gli attacchi in un ambiente di laboratorio virtualizzato locale o su una macchina cloud isolata.
-
-## Licenza
-
-Progetto accademico - Università degli Studi di L'Aquila
+> Progetto a scopo didattico. Gli honeypot sono progettati per essere attaccati — non deployare su reti di produzione o segmenti non isolati.
