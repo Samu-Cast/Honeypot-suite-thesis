@@ -30,7 +30,9 @@ def index():
         "top_countries": [], "top_asns": [], "enriched_ips": 0
     }
     if conn is None:
-        return render_template("index.html", correlations=[], stats=empty_stats)
+        return render_template("index.html", correlations=[], stats=empty_stats,
+                               has_intel=False, chart_labels='[]', chart_data='[]',
+                               country_labels='[]', country_data='[]')
 
     cursor = conn.cursor()
     has_intel = _has_table(cursor, "ip_intel")

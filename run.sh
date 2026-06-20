@@ -12,7 +12,7 @@ chmod 666 cowrie/logs/cowrie.json opencanary/logs/opencanary.log
 chmod 777 dionaea/data
 
 echo "Starting Docker containers..."
-docker compose up -d
+docker compose up -d --build
 
 echo "Generating simulated attacks..."
 python3 test/simulate_attack.py

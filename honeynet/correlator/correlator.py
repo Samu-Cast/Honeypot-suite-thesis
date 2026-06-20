@@ -172,7 +172,7 @@ def follow_file(filename, source_name):
     while not os.path.exists(filename):
         time.sleep(1)
 
-    with open(filename, 'r') as f:
+    with open(filename, 'r', errors='ignore') as f:
         while True:
             line = f.readline()
             if not line:
@@ -244,6 +244,10 @@ def analyze_and_aggregate():
         time.sleep(AGGREGATION_INTERVAL)
         now = datetime.utcnow()
 
+        # Collect sessions ready for finalization while holding the lock,
+        # then process them (DB writes) outside the lock so add_event()
+        # is never blocked during I/O.
+        ready = []
         with events_lock:
             for ip, events in list(active_sessions.items()):
                 if not events:
@@ -264,12 +268,14 @@ def analyze_and_aggregate():
                 sessions_to_process.append(current_session)
 
                 latest_event_time = current_session[-1]['timestamp']
-                # timestamps are already naive UTC at this point
 
                 if now - latest_event_time > SESSION_WINDOW:
-                    for s in sessions_to_process:
-                        process_session(ip, s)
+                    ready.append((ip, sessions_to_process))
                     del active_sessions[ip]
+
+        for ip, sessions in ready:
+            for s in sessions:
+                process_session(ip, s)
 
 
 def classify_pattern(cowrie_hits, dionaea_hits, opencanary_hits, threshold=None):
