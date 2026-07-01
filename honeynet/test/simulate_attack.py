@@ -196,11 +196,10 @@ if __name__ == "__main__":
     now = datetime.now(timezone.utc)
 
     for ip in ATTACKER_IPS:
-        min_patterns = int(len(SCENARIOS) * 0.75)
-        n_patterns = random.randint(min_patterns, len(SCENARIOS))
-        chosen = random.sample(list(SCENARIOS.keys()), n_patterns)
+        chosen = list(SCENARIOS.keys())
+        random.shuffle(chosen)
 
-        print(f"[sim] {ip} -> {n_patterns} patterns")
+        print(f"[sim] {ip} -> {len(chosen)} patterns")
 
         for pattern in chosen:
             minutes_in_past = 600 - (total_sessions * 5)

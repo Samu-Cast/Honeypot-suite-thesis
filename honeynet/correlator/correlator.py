@@ -22,6 +22,7 @@ print(f"[config] SESSION_WINDOW={SESSION_WINDOW.seconds}s  BRUTE_FORCE_THRESHOLD
 
 events_lock = threading.Lock()
 active_sessions = {}  # { ip: [ {timestamp, source, event_type, detail}, ... ] }
+session_last_added = {}  # { ip: datetime } — wall-clock time of the MOST RECENT event for the IP
 
 enrich_queue = queue.Queue()
 known_ips = set()
@@ -104,6 +105,7 @@ def init_db():
             with events_lock:
                 if src_ip not in active_sessions:
                     active_sessions[src_ip] = []
+                session_last_added[src_ip] = datetime.utcnow()
                 active_sessions[src_ip].append({
                     'timestamp': ts,
                     'source': src,
@@ -128,6 +130,8 @@ def add_event(source_ip, timestamp, source, event_type, detail):
     with events_lock:
         if source_ip not in active_sessions:
             active_sessions[source_ip] = []
+        # aggiornato a OGNI evento: la finalizzazione avviene per quiescenza
+        session_last_added[source_ip] = datetime.utcnow()
 
         if isinstance(timestamp, str):
             try:
@@ -236,7 +240,14 @@ def poll_dionaea():
             except Exception as e:
                 print(f"Dionaea poll error: {e}")
 
-        time.sleep(5)
+        time.sleep(2)
+
+
+# Grace period (wall-clock): a session is finalized only once no new event
+# has arrived for the IP in this interval.  Must be >= SESSION_WINDOW and
+# comfortably larger than the Dionaea poll interval, so the slower Dionaea
+# poller has time to contribute its events to the same session.
+FINALIZATION_DELAY = timedelta(seconds=int(os.environ.get("FINALIZATION_DELAY_SECS", "8")))
 
 
 def analyze_and_aggregate():
@@ -268,10 +279,17 @@ def analyze_and_aggregate():
                 sessions_to_process.append(current_session)
 
                 latest_event_time = current_session[-1]['timestamp']
+                last_added = session_last_added.get(ip, now)
 
-                if now - latest_event_time > SESSION_WINDOW:
+                # Finalize only when the session window has expired AND no new
+                # event has arrived for the IP in the last FINALIZATION_DELAY:
+                # this gives the slower Dionaea poller time to contribute its
+                # events to the same session before it is closed.
+                if (now - latest_event_time > SESSION_WINDOW
+                        and now - last_added > FINALIZATION_DELAY):
                     ready.append((ip, sessions_to_process))
                     del active_sessions[ip]
+                    session_last_added.pop(ip, None)
 
         for ip, sessions in ready:
             for s in sessions:
